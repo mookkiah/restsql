@@ -2,17 +2,28 @@
 package org.restsql.core.impl.oracle;
 
 import java.sql.Connection;
-import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.Map;
 
-import java.sql.ResultSetMetaData;
-import javax.sql.rowset.RowSetMetaDataImpl; 
 import org.restsql.core.impl.AbstractSqlResourceMetaData;
 import org.restsql.core.impl.ColumnMetaDataImpl;
 import org.restsql.core.sqlresource.SqlResourceDefinition;
-import org.restsql.core.sqlresource.SqlResourceDefinitionUtils;    
+import org.restsql.core.sqlresource.SqlResourceDefinitionUtils;
+
+import com.foundationdb.sql.StandardException;
+import com.foundationdb.sql.parser.CursorNode;
+import com.foundationdb.sql.parser.FromBaseTable;
+import com.foundationdb.sql.parser.FromList;
+import com.foundationdb.sql.parser.FromTable;
+import com.foundationdb.sql.parser.HalfOuterJoinNode;
+import com.foundationdb.sql.parser.ResultColumnList;
+import com.foundationdb.sql.parser.ResultSetNode;
+import com.foundationdb.sql.parser.SQLParser;
+import com.foundationdb.sql.parser.SelectNode;
+import com.foundationdb.sql.parser.StatementNode;
 
 /**
  * Metadata implementation for Oracle Database
@@ -22,9 +33,13 @@ import org.restsql.core.sqlresource.SqlResourceDefinitionUtils;
 
 public class OracleSqlResourceMetaData extends AbstractSqlResourceMetaData {
 	private static final String SQL_COLUMNS_QUERY = "select column_name, data_type, data_default from all_tab_columns where owner =  ? and table_name = ?";
-	private static final String SQL_PK_QUERY = "SELECT cols.table_name, cols.column_name, cols.position, cons.status, cons.owner FROM all_constraints cons, all_cons_columns cols"
+	private static final String SQL_PK_QUERY = "SELECT  cols.column_name FROM all_constraints cons, all_cons_columns cols"
 			+ " WHERE cons.owner = ? AND cols.table_name = ?"
 			+ " AND cons.constraint_type = 'P' AND cons.constraint_name = cols.constraint_name ";
+	
+	private Map<String,String> aliasToTable = new HashMap<String, String>();
+	private Map<String, String> columnToTable = new HashMap<String, String>();
+
 
 	/**
 	 * Retrieves database name from result set meta data. Hook method for buildTablesAndColumns() allows
@@ -53,9 +68,24 @@ public class OracleSqlResourceMetaData extends AbstractSqlResourceMetaData {
 	@Override
 	protected String getColumnTableName(final SqlResourceDefinition definition,
 			final ResultSetMetaData resultSetMetaData, final int colNumber) throws SQLException {
-    return definition.getMetadata().getTable().get(0).getName();
+
+		
+		String columnName = resultSetMetaData.getColumnName(colNumber);
+		String columnTableName = getColumnToTable().get(columnName);
+		if(getAliasToTable().containsKey(columnTableName)){
+			return getAliasToTable().get(columnTableName);
+		}
+		
+		if(columnTableName == null){
+			//TODO columnTableName is not idetified. Check sql parser 
+			return definition.getMetadata().getTable().get(0).getName();
+		}
+		
+		return columnTableName;
+
 		//return ((ResultSetMetaData) resultSetMetaData).getTableName(colNumber);
 	}
+	
 
 	/**
 	 * Retrieves sql for querying columns. Hook method for buildInvisibleForeignKeys() and buildJoinTableMetadata()
@@ -78,13 +108,25 @@ public class OracleSqlResourceMetaData extends AbstractSqlResourceMetaData {
 	@Override
 	protected String getQualifiedTableName(final SqlResourceDefinition definition,
 			final ResultSetMetaData resultSetMetaData, final int colNumber) throws SQLException {
-    return definition.getMetadata().getTable().get(0).getName();
+		
+		String columnName = resultSetMetaData.getColumnName(colNumber);
+		String columnSource = getColumnToTable().get(columnName);
+		if(getAliasToTable().containsKey(columnSource)){
+			return getAliasToTable().get(columnSource);
+		}
+		
+		if(columnSource == null){
+			return definition.getMetadata().getTable().get(0).getName();
+		}
+		
+		return columnSource;
+		
 	}
 
 	/** Retrieves database-specific table name used in SQL statements. Used to build join table meta data. */
 	@Override
 	protected String getQualifiedTableName(Connection connection, String databaseName, String tableName) {
-			return databaseName + "." + tableName;
+			return tableName;
 		}
 
 	/**
@@ -121,9 +163,72 @@ public class OracleSqlResourceMetaData extends AbstractSqlResourceMetaData {
 			column.setSequenceName(columnDefault.substring(9, columnDefault.indexOf('\'', 10)));
 		}
 	}
-  
-  protected String getSqlMainQuery(final SqlResourceDefinition definition) {
-		return definition.getQuery().getValue() + " WHERE ROWNUM = 1 " ;
+
+@Override
+protected String getQualifiedColumnLabel(String tableName,
+		String qualifiedTableName, boolean readOnly, String label) {
+	return label;
+}
+
+protected boolean isDbMetaDataUpperCase() {
+	return true;
+}
+
+
+protected void parseQuery(final SqlResourceDefinition definition){
+	try{
+		SQLParser parser = new SQLParser();
+		StatementNode stmt = parser.parseStatement(definition.getQuery().getValue());
+        CursorNode cursor = (CursorNode)stmt;
+        SelectNode selectNode = (SelectNode)cursor.getResultSetNode();
+        ResultColumnList rcl = selectNode.getResultColumns();
+        FromList fl = selectNode.getFromList();
+        for (FromTable fromTable : fl) {
+        	extractCorrelations(fromTable);
+		}
+        
+        String[] columns = rcl.getColumnNames();
+        for (String columnName : columns) {
+        	columnToTable.put(columnName.toUpperCase(), rcl.getResultColumn(columnName).getTableName());
+		}
+	}catch(Exception e){
+		e.printStackTrace();
 	}
-   
+
+}
+
+
+
+private void extractCorrelations(FromTable fromTable)
+		throws StandardException {
+	if(fromTable instanceof FromBaseTable){
+		FromBaseTable fbt = (FromBaseTable)fromTable;
+		String originalTableName = fbt.getOrigTableName().getTableName();
+		String correlationName = fbt.getCorrelationName();
+		if(correlationName == null){
+			correlationName = originalTableName;
+		}
+		aliasToTable.put(correlationName, originalTableName);
+	}else if (fromTable instanceof HalfOuterJoinNode){
+		HalfOuterJoinNode join = (HalfOuterJoinNode)fromTable;
+		FromBaseTable fbt = ((FromBaseTable)join.getRightResultSet());
+		extractCorrelations(fbt);
+		ResultSetNode leftResultNode = join.getLeftResultSet();
+		if(leftResultNode instanceof FromTable){
+			extractCorrelations((FromTable)leftResultNode);
+		}
+	}else{
+		System.err.println(fromTable);
+	}
+}
+
+
+public Map<String, String> getAliasToTable() {
+	return aliasToTable;
+}
+
+public Map<String, String> getColumnToTable() {
+	return columnToTable;
+}
+
 }

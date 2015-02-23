@@ -245,6 +245,7 @@ public abstract class AbstractSqlResourceMetaData implements SqlResourceMetaData
 		Connection connection = null;
 		String sql = null;
 		SqlResourceDefinitionUtils.validate(definition);
+		parseQuery(definition);
 		try {
 			connection = Factory.getConnection(SqlResourceDefinitionUtils.getDefaultDatabase(definition));
 			final Statement statement = connection.createStatement();
@@ -274,6 +275,10 @@ public abstract class AbstractSqlResourceMetaData implements SqlResourceMetaData
 		}
 		hierarchical = getChild() != null;
 	}
+
+	protected  void parseQuery(final SqlResourceDefinition definition){
+		
+	};
 
 	@Override
 	public boolean isHierarchical() {

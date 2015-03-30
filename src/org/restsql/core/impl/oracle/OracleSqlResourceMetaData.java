@@ -37,8 +37,9 @@ public class OracleSqlResourceMetaData extends AbstractSqlResourceMetaData {
 			+ " WHERE cons.owner = ? AND cols.table_name = ?"
 			+ " AND cons.constraint_type = 'P' AND cons.constraint_name = cols.constraint_name ";
 	
-	private Map<String,String> aliasToTable = new HashMap<String, String>();
-	private Map<String, String> columnToTable = new HashMap<String, String>();
+	private Map<String,String> aliasToTableName = new HashMap<String, String>();
+	
+	private Map<Integer, String> columnToTableAlias = new HashMap<Integer, String>();
 
 
 	/**
@@ -70,13 +71,13 @@ public class OracleSqlResourceMetaData extends AbstractSqlResourceMetaData {
 			final ResultSetMetaData resultSetMetaData, final int colNumber) throws SQLException {
 
 		
-		String columnName = resultSetMetaData.getColumnName(colNumber);
-		String columnTableName = getColumnToTable().get(columnName);
-		if(getAliasToTable().containsKey(columnTableName)){
-			return getAliasToTable().get(columnTableName);
+		String columnTableName = getColumnToTableAlias().get(colNumber);
+		if(getAliasToTableName().containsKey(columnTableName)){
+			return getAliasToTableName().get(columnTableName);
 		}
-		
+		System.out.println("*&*&*&*&*&**&*&*&*&*&*&*&" + ((ResultSetMetaData) resultSetMetaData).getTableName(colNumber));
 		if(columnTableName == null){
+			System.out.println("columnTableName is not idetified. Check sql parser");
 			//TODO columnTableName is not idetified. Check sql parser 
 			return definition.getMetadata().getTable().get(0).getName();
 		}
@@ -109,10 +110,9 @@ public class OracleSqlResourceMetaData extends AbstractSqlResourceMetaData {
 	protected String getQualifiedTableName(final SqlResourceDefinition definition,
 			final ResultSetMetaData resultSetMetaData, final int colNumber) throws SQLException {
 		
-		String columnName = resultSetMetaData.getColumnName(colNumber);
-		String columnSource = getColumnToTable().get(columnName);
-		if(getAliasToTable().containsKey(columnSource)){
-			return getAliasToTable().get(columnSource);
+		String columnSource = getColumnToTableAlias().get(colNumber);
+		if(getAliasToTableName().containsKey(columnSource)){
+			return getAliasToTableName().get(columnSource);
 		}
 		
 		if(columnSource == null){
@@ -188,8 +188,10 @@ protected void parseQuery(final SqlResourceDefinition definition){
 		}
         
         String[] columns = rcl.getColumnNames();
+        int columnNumber = 0;
         for (String columnName : columns) {
-        	columnToTable.put(columnName.toUpperCase(), rcl.getResultColumn(columnName).getTableName());
+        	columnNumber++;
+        	columnToTableAlias.put(columnNumber, rcl.getResultColumn(columnName).getTableName());
 		}
 	}catch(Exception e){
 		e.printStackTrace();
@@ -208,7 +210,7 @@ private void extractCorrelations(FromTable fromTable)
 		if(correlationName == null){
 			correlationName = originalTableName;
 		}
-		aliasToTable.put(correlationName, originalTableName);
+		aliasToTableName.put(correlationName, originalTableName);
 	}else if (fromTable instanceof HalfOuterJoinNode){
 		HalfOuterJoinNode join = (HalfOuterJoinNode)fromTable;
 		FromBaseTable fbt = ((FromBaseTable)join.getRightResultSet());
@@ -223,12 +225,12 @@ private void extractCorrelations(FromTable fromTable)
 }
 
 
-public Map<String, String> getAliasToTable() {
-	return aliasToTable;
+public Map<String, String> getAliasToTableName() {
+	return aliasToTableName;
 }
 
-public Map<String, String> getColumnToTable() {
-	return columnToTable;
+public Map<Integer, String> getColumnToTableAlias() {
+	return columnToTableAlias;
 }
 
 }
